@@ -1,0 +1,407 @@
+---
+title: "W203 Broadband Exploration"
+author: "Pham, Ravi, Thielen"
+output: pdf_document
+---
+
+## Background
+
+High-speed network connectivity is increasingly viewed as an essential public infrastructure.  There is a active research community that investigates the extent to which government policies foster a healthy broadband market.  The performance of a network industry is often considered in terms of two metrics.
+
+- Speed refers to rate at which customers can upload or download bits of data.
+- Penetration refers to the fraction of customers that have access to network service.
+
+While the policy debate in the United States is largely limited to so-called net neutrality rules, much of the developed world has adopted more aggressive regulatory structures.  These include open access regulations, which compel network owners to share part of their infrastructure with other companies at regulated rates.  Such regulations are often justified by the observation that the high cost of network infrastructure creates what is known as a natural monopoly.  In 2010, a major study by the Berkman Center for Internet and Society reported that out of all OECD countries, only the United States, Mexico, and the Slovak Republic had not adopted some form of open access.
+
+Other countries may also mandate that companies increase penetration, such as through universal access regulation.
+
+In the United States, network owners argue that facilities-based competition - a term that means unregulated competition, typically between a cable and a DSL provider - is sufficient to incentivize investment in high-quality networks.  They caution that attempts to regulate prices or mandate greater penetration will reduce incentives to invest in modern equipment or to lay cable to difficult-to-reach rural areas.  Thus, there is a trade-off among price, speed, and penetration.
+
+
+## Data
+
+To start our exploration, we were provided with three data files, `Price.csv`, `Penetration.csv`, and `Speed.csv`.  These contain actual data that was utilized by the Berkman Center, but were modified to test our importing and data cleaning abilities. The data files include 30 observations of 6 variables, 31 observations of 13 variables, and 32 observations of 17 variables respectively.
+
+As a first step in our analysis, we combined these files into a single data frame using the `dplyr` package, which contains a set of traditional database join functions. 
+
+### Data Import
+
+We utilized several optional parameters to limit the tidying that was necessary after the data import. Some of these required manual inspection of the .csv files, for example, `na.strings` was set to an empty string after examining the data via the command line interface.
+
+``` {r}
+# read data files into separate objects
+speed = read.table("Speed.csv", sep = ",", header = TRUE, na.strings = "", 
+                   stringsAsFactors = FALSE, blank.lines.skip = TRUE)
+penetration = read.table("Penetration.csv", sep = ",", header = TRUE, na.strings = "", 
+                   stringsAsFactors = FALSE, blank.lines.skip = TRUE)
+price = read.table("Price.csv", sep = ",", header = TRUE, na.strings = "", 
+                   stringsAsFactors = FALSE, blank.lines.skip = TRUE)
+```
+
+To avoid losing any data we determined a `full_join()` on the `Country` variable would best meet our needs as the `Country` variable was unique across all records and was present in all tables. First, the speed and penetration tables were joined, followed by a join of the price table.
+
+```{r, message=FALSE, warning=FALSE}
+# Conduct a full join on the three tables using dplyr
+library(dplyr)
+broadband_dirty <- speed %>% 
+                   full_join(penetration, by = "Country") %>%
+                   full_join(price, by = "Country")
+```
+
+### Data Tidying
+
+To begin cleaning the data for an exploratory analysis, we first view a `summary()` of the merged dataframe.
+
+``` {r, eval=FALSE}
+# View an initial summary.  Output is supressed here to save room. 
+# The below call to str() displays a similar result, and summary() is 
+# called later without suppression.
+summary(broadband_dirty)
+```
+
+After viewing the summary statistics for our new dataframe it became apparent that many of the variables were typed incorrectly during our data import (e.g. `Maximum.advertised.speed.OECD..kbps.` was imported as a character class). It also became apparent that there were a few redundant variables (e.g. `Country`, `Country.code`, etc.) that could be safely removed. While we weren't a fan of the variable naming convention, we chose to leave it as-is to avoid ambiguation for someone replicating the results from the source files. In the below code chunk, we remove the redundant variables and empty observations from the dataframe.
+
+``` {r}
+# Remove redundant data columns and empty observations
+broadband_dirty[,c("X","Country.code", "Country.Code.x", "Country.Code.y")] <- NULL
+broadband_dirty2 = broadband_dirty[1:30,]
+```
+
+Next, we examine the variable classes to ensure we can properly use R's basic statistical functions.
+
+``` {r}
+# Check the data types
+str(broadband_dirty2)
+```
+
+The `str()` function shed light on our incorrectly typed variables. Many entries include quotations, whitespace, and other extranious characters that would have preferably been left out of the .csv files at the time of encoding. Fortunately, R provides many options to tidy this data into a usable format.  We will define a function to clean and retype the data which can be applied to all the fields of our dataframe.
+
+``` {r}
+# Fix csv encoding errors and retype columns as needed
+clean <- function(ttt){
+ as.numeric(gsub('[^A-Za-z0-9.]','',noquote(trimws(ttt))))
+}
+
+broadband_dirty2 <- cbind(broadband_dirty2[1],apply(broadband_dirty2[2:30],2,clean)) 
+
+```
+
+Rexamining `str()` allows us to verify the previous functions worked as expected.
+
+``` {r}
+# Check the data types
+str(broadband_dirty2)
+```
+
+To further ease further data exploration, we chose to also remove the last remaining character class variable, `Country`, from the dataframe. To do this without sacrificing data, we assign the variable to its respective row name and reassign the remaining variables to a - hopefully - clean dataframe, named here as `broadband`.
+
+``` {r}
+# Assign variable "Country" to row names and remove the variable
+row.names(broadband_dirty2) = broadband_dirty2$Country
+broadband = broadband_dirty2[,-1]
+```
+
+At this point in the data cleaning process, we were iteratively using the `colnames()`, `str()`, and `summary()` commands to verify our work and check for other glaring data entry errors. Below we will summarize the descriptive statistics in a tabular format using fBasics package. Further, we will also identify outliers and skewness through code and include it as part of the summary table.
+
+``` {r, tidy=TRUE}
+# View a summary of the cleaned data
+#summary(broadband)
+library(fBasics)
+summary_stats <- data.frame(t(basicStats(broadband))) %>%
+                 select(NAs,Minimum,Maximum,Mean, Median,X1..Quartile, X3..Quartile) %>%
+                 setNames(c("NAs","Min","Max","Mean","Median","quart_1","quart_3")) %>%
+                 mutate(low_val = ifelse((quart_1 - 1.5*(quart_3 - quart_1)) < 0,0, (quart_1 - 1.5*(quart_3 - quart_1))), high_val = (quart_3 + 1.5*(quart_3 - quart_1)) ) %>%
+                 mutate(outlier = (Min < low_val) | (Max > high_val)) %>%
+                 mutate(skew = ifelse(Mean < Median, "left", "right")) %>%
+                 mutate_if(is.numeric,funs(round(.,2)))
+
+ 
+ row.names(summary_stats) <- names(broadband) 
+ summary_stats[c('NAs','Min','Max','Mean','Median','outlier','skew')]
+```
+
+From the simple statistical summary, we determined that the variable `Percent.of.population.in.urban.areas` needed to be reexamined due to its maximum value exceeding 100%. The value, which belonged to Poland's observation, was indeed an outlier and our independent research suggested replacing the incorrect value with 61%, which we do below. The below code is not optimal in this situation, but after verifying that Poland's record holds the only value for this variable over 100, we know that it will produce the intended results and will demonstrate R's conditional indexing in the process.
+
+``` {r}
+broadband$Percent.of.population.in.urban.areas[
+  broadband$Percent.of.population.in.urban.areas>100] = 61
+```
+
+## Objective
+
+Using only descriptive statistics (no inference), we investigate the three-way relationship between price, speed, and penetration.  Does a trade-off exist between these concepts?  Secondarily, is there evidence for the beneficial effects of open access policies? We will begin our exploration with a univariate analysis.
+
+## Univariate Analysis of Key Variables
+
+### Speed Variables
+
+The below code and resulting plots describe the distribution of the multiple speed related variables.
+
+```{r fig.width=6.5, fig.height=3, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(reshape2)
+library(car)
+library(tidyverse)
+
+ggplot(melt(broadband[,1:2]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("kb/s") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Maximum.advertised.speed.OECD..kbps.",
+                                  "Average.advertised.speed.OECD..kbps."),
+                         labels=c("Max Advertised Speed",
+                                  "Avg Advertised Speed"))
+
+
+ggplot(melt(broadband[,c(3,4,6)]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("kb/s") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Average.actual.speed..Akamai..kbps.", 
+                                  "Average.download.speedtest.net..kbps.", 
+                                  "Average.upload.speedtest.net..kbps."),
+                         labels=c("Avg Actual Speed", "Avg Download Speed", 
+                                  "Avg Upload Speed"))
+
+
+ggplot(melt(broadband[,c(5,7)]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("kb/s") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Standard.deviation.download..speedtest.net",
+                                  "Standard.deviation.upload..speedtest.net"),
+                         labels=c("StDev Download Speed", "StDev Upload Speed"))
+
+
+ggplot(melt(broadband[,c(8,9,12,15)]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("ms") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Average.latency.speedtest.net", 
+                                  "Standard.deviation.latency..speedtest.net", 
+                                  "Median.latency..speedtest.net", 
+                                  "X10p..Latency..speedtest.net"),
+                         labels=c("Avg Latency", "StDev Latency", 
+                                  "Median Latency", 
+                                  "10th Percentile Latency"))
+
+
+ggplot(melt(broadband[,c(10,11,13,14)]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("kb/s") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Median.download..speedtest.net..kbps.", 
+                                  "Median.upload..speedtest.net..kbps.", 
+                                  "X90p..Download..speedtest.net..kbps.", 
+                                  "X90p..Upload..speedtest.net..kbps."),
+                         labels=c("Median Download Speed", "Median Upload Speed", 
+                                  "90th Percentile Download Speed", 
+                                  "90th Percentile Upload Speed"))
+```
+
+The remaining plots offer many insights into the speed variables:
+
+The latter plot illustrates a very common median upload speed across OECD countries, likely indicating that upload speeds are limited not by technology, but by the service provider. It also shows that the 90th percentile download speeds vary greatly by country.
+
+* The average actual speed variable is somewhat redundant as it simply aggregates the average download and upload speed for each country. 
+* Most speed related variables are right-skewed, indicating that a minority of OECD countries are ahead of their peers in broadband speed metrics. 
+* Download speeds are generally higher and more variable than upload speeds.
+* Latency is highly variable, with a right-skew within individual countries. Some countries have very high average latency or highly variable latency.
+* While many of the speed variable distributions appear multimodal when viewing smooth density plots, one needs remain cognizant that the dataset only includes 30 countries and thus outliers have a large affect.
+* Median upload speeds are very tightly grouped, suggesting that they are probably artificially limited, and not by broadband infrastructure, which would be more variable across countries.
+
+### Penetration Variables
+
+```{r fig.width=6.5, fig.height=3, message=FALSE, warning=FALSE}
+ggplot(melt(broadband[,16:18]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("Penetration in OECD Countries, per 100") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Penetration.per.100.OECD..2008", 
+                                  "Penetration.per.100.OECD..2007", 
+                                  "Household.penetration..OECD"),
+                         labels=c("Individuals, 2008", "Individuals, 2007", 
+                                  "Households"))
+
+
+ggplot(melt(broadband[,19:21]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("Penetration in OECD Countries, per 100") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.66, .95), 
+        plot.title = element_text(hjust = 0.5)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("X2G.and.3G.penetration.per.100..OECD", 
+                                  "X3G.penetration.per.100", 
+                                  "Penetration.per.100.GC"),
+                         labels=c("2G/3G Devices", "3G Devices", 
+                                  "TeleGeography GC Source"))
+
+
+ggplot(melt(broadband[,22]), aes(x=value, fill="")) +
+  geom_density(alpha = .5) +
+  xlab("Growth in 3G Penetration (%), 2008-09") +
+  ylab("Density") +
+  theme(legend.position="none")
+
+
+ggplot(melt(broadband[,23]), aes(x=value, fill="")) +
+  geom_density(alpha = .5) +
+  xlab("Number of WiFi Hotspots") +
+  ylab("Density") +
+  theme(legend.position="none")
+
+
+ggplot(melt(broadband[,24]), aes(x=value, fill="")) +
+  geom_density(alpha = .5) +
+  xlab("WiFi Hotspots, per 100,000") +
+  ylab("Density") +
+  theme(legend.position="none")
+
+
+ggplot(melt(broadband[,25]), aes(x=value, fill="")) +
+  geom_density(alpha = .5) +
+  xlab("Population in Urban Areas (%)") +
+  ylab("Density") +
+  theme(legend.position="none")
+```
+
+The penetration plots are likewise instructive:
+
+* Penetration data comes in many forms, with many variables serving as a proxy for related ideas. For example, penetration per 100 for individuals in 2007 and 2008 offer highly similar data that is probably related to 3G penetration growth. Likewise, the number of WiFi hotspots and the number per capita similarly present related information.
+* Some variables are repeated with data from a different source, such as the variables 3G penetration and TeleGeography GC Source, which both appear to measure the same concept with slightly different methodology.
+* The urban population variable is unique, serving as a proxy for how difficult broadband infrastructure, and thus penetration, is to establish in a country. One cannot aggregate this variable with other penetration measures to determine a standardized penetration score.
+
+### Price Variables
+
+```{r fig.width=6.5, fig.height=3, message=FALSE, warning=FALSE}
+ggplot(melt(broadband[,26:29]), aes(x=value, fill=variable)) +
+  geom_density(alpha = .5) +
+  xlab("Price, USD ($)") +
+  ylab("Density") +
+  theme(legend.justification = c(1,1), legend.position = c(.95, .95)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_discrete(name="",
+                         breaks=c("Price.for.low.speeds..combined", 
+                                  "Price.for.med.speeds..combined", 
+                                  "Price.for.high.speeds..combined", 
+                                  "Price.for.very.high.speeds..combined"),
+                         labels=c("Low Speed", "Medium Speed", 
+                                  "High Speed", "Very High Speed"))
+```
+
+Price is presented much more easily, with a mere four variables on the same dimension. Some key price insights are from the above plots are:
+
+* In general, prices increase as the corresponding speed increases.
+* There is a lot of overlap between categorical prices (i.e. very high speed broadband in Country A can be cheaper than low speed broadband in Country B)
+* A simple price average should serve to aggregate the price variables by country.
+
+## Bivariate/Multivariate Analysis of Key Relationships
+
+With 29 variables, there are many bivariate relationships that could be analyzed. The below plot illustrates the correlation present between all bivariate relationships, where green intersections indicate a strong positive correlation, and red intersections indicate a strong negative correlation. The green diagonal represents every variable's correlation with itself.
+
+``` {r fig.width = 10, fig.height = 10}
+cormat = cor(broadband, use = "na.or.complete")
+melted_cormat = melt(cormat)
+ggplot(data = melted_cormat) + 
+  geom_tile(aes(x=Var1, y=Var2, fill=value)) +
+  scale_fill_continuous(low="red", high = "green") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+```
+
+There are three highly correlated regions in the correlation plot, representing the speed variables' correlation with one another, the penetration variables' correlation with one another, and the price variables' correlation with one another. These relationships are strong, but not particularly interesting. In the following analysis, we will attempt to normalize the broadband variables and assign a single score to a country's broadband speed, penetration, and price.
+
+First, we'll normalize the entire dataframe using the `scale()` function, which computes the z-score for every entry by column (i.e. variable). In the same code chunk, we transform the z-scores of bad broadband attributes by reversing the sign of the z-score. Finally, we remove the normalized urban population variable due to our hypothesis that it measures a tertiary cause, rather than broadband penetration. 
+
+We made the following assumptions when deciding what constituted a bad broadband attribute:
+
+* Standard deviations mostly represent the variability of access between urban and rural communities, or the rich and poor, rather than a measure of consumer options. Thus, we assumed that standard deviation is a negative attribute because it best reflects inequality.
+* Latency is inherently negative.
+
+``` {r}
+normalized = data.frame(scale(broadband))
+normalized$Standard.deviation.download..speedtest.net = normalized$Standard.deviation.download..speedtest.net * -1
+normalized$Standard.deviation.upload..speedtest.net = normalized$Standard.deviation.upload..speedtest.net *-1
+normalized$Average.latency.speedtest.net = normalized$Average.latency.speedtest.net * -1
+normalized$Standard.deviation.latency..speedtest.net = normalized$Standard.deviation.latency..speedtest.net * -1
+normalized$Median.latency..speedtest.net = normalized$Median.latency..speedtest.net * -1
+normalized$X10p..Latency..speedtest.net = normalized$X10p..Latency..speedtest.net * -1
+normalized$Percent.of.population.in.urban.areas = NA
+```
+
+Next, we calculated a simple mean of the variables in each broadband categorical measure (i.e. Speed, Penetration, and Price), excluding the variables mentioned earlier in the report which tend to duplicate the measures of the same concepts, as well as variables that duplicate measures of variable location or centrality. We also create a new variable called `OpenAccess` to indicate which countries have open access policies.
+
+```{r}
+normalized$SpeedScore = rowMeans(normalized[,4:9], na.rm = TRUE)
+normalized$PenetrationScore = rowMeans(normalized[,c(16,18,19,21,22,24)], na.rm = TRUE)
+normalized$PriceScore = rowMeans(normalized[,26:29], na.rm = TRUE)
+aggNormalized = normalized[,30:32]
+aggNormalized$OpenAccess = factor(c("YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","YES","NO","YES","YES","YES","YES","YES","NO","YES","YES","YES","YES","YES","NO"))
+```
+
+Finally, let's analyze a scatterplot matrix of our computed aggregate scores. The below code generates a scatterplot matrix with the open access countries plotted in red triangles and the remaining countries plotted in black circles.
+
+``` {r fig.width = 10, fig.height = 10}
+# Look at bivariate relationships between aggregate summaries
+scatterplotMatrix(aggNormalized[,1:3], diagonal = "histogram", groups = aggNormalized$OpenAccess)
+```
+
+Based on our assumptions, transformations, and visualization, several interesting relationships become apparent:
+
+* The overall measure of a country's broadband speed is positively correlated with the measure of its penetration (+Speed ~ +Penetration).
+* The overall measure of a country's broadband penetration is highly negatively correlated with the measure of its price (+Penetration ~ -Price).
+* The overall measure of a country's broadband price is negatively correlated with the measure of its speed (+Price ~ -Speed).
+
+There are two speed outliers that are convuluting relationships with the speed variable which deserve additional analysis. These two countries are Iceland and Luxembourg, which was determined by viewing the `normalized` dataframe.  These outliers are also present and labeled in the following plot. These speed scores are so low due to extremely variable, and extremely high latency variables, respectively. Further analysis should attempt to determine whether the aggregate measures of speed, penetration, and price should be computed with a weighted, rather than a simple, average (i.e. How important is latency when attempting to quantify broadband speed or quality?).
+
+## Analysis of Secondary Effects
+
+Below, we combine the aggregrate variables with the open access and urban population variables in a single visualization.
+
+``` {r fig.width = 10, fig.height = 6.5}
+ggplot(data = aggNormalized) +
+  geom_point(mapping = aes(x=PenetrationScore, y=SpeedScore, color=PriceScore,
+                           shape=OpenAccess, size = broadband$Percent.of.population.in.urban.areas)) +
+  ggtitle("Normalized Broadband Penetration, Speed, and Price Scores by OECD Countries") +
+  scale_colour_gradientn(colors = c("#008000","#FFFF00","#ff0000"), name="Price Score") +
+  scale_shape_manual(values=c(8, 16)) +
+  scale_size(range=c(3,10), name="Percent Urban Population") +
+  geom_hline(aes(yintercept=0)) +
+  geom_vline(aes(xintercept=0)) +
+  geom_text(aes(x=PenetrationScore, y=SpeedScore, label=row.names(aggNormalized)),
+            check_overlap = TRUE, nudge_y = -.07) + 
+  theme(plot.title = element_text(hjust = 0.5), panel.background = element_rect(
+    fill='gray', colour='gray'))
+```
+
+We can draw a few insights from this visualization:
+
+* Price tends to decrease with increased penetration.
+* Penetration tends to increase with larger proportions of the populace in urban areas.
+* The countries with the highest cost of broadband also tend to have low speeds.
+* Countries without open access policies tend to fare worse off overall, especially with regard to their broadband penetration.
+
+## Conclusion
+
+We faced quite a few challenges early on with the datasets provided. We took the time ensure the datasets were groomed and accurate before performing any type of analysis. Once the dataset was stable, we were able to take a deeper dive into the variables concerning speed, penetration, and price. We discovered some interesting trends within the subset of variables, some that made sense and some that did not. When we did our multivariate analysis, we were able to analyze the relationship between the key variables. In general, we were able to conclude that a country's broadband price is negatively correlated with the measure of its speed, the country's broadband penetration is negatively correlated with it's price, and a country's broadband speed is positively correlated with it's penetration. When we looked at countries with open access policies against countries without it, countries without open access seemed to have fared worse off in regards to their broadband penetration. Overall, there were still many items left for our team to uncover but given the nature of the exercise, we felt we have learned a tremendous amount. 
