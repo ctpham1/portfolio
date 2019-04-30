@@ -1,0 +1,26 @@
+Who wants to be a millionaire?
+
+Questions Object:
+	pull from question bank method(question level)
+	
+Money Made Object:
+	Add money method(balance)
+	Money resets to certain amount if wrong method
+
+Text object: - this will display text to the player so they can follow
+	name method
+	rules method
+	commentary method - how are they doing in the game
+	if answer correct method
+	if answer wrong method
+	
+Game mechanics object:
+	play method - for example to continue or not continue
+	ask question method
+	Final answer method
+	validation if correct method
+	option to see rules method
+
+***Maybe lifeline object:
+	use life line method
+	use life line 2 method
