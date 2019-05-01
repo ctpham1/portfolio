@@ -1,0 +1,363 @@
+---
+title: "W203 Lab3 Group 2"
+author: Chris, Matt, Ravi
+output: pdf_document
+---
+
+## Background
+
+In this lab we examine a portion of the data used by Cornwell and Trumball in their paper "Estimating the Economic Model of Crime with Panel Data" in order to provide local governance policy suggestions with regard to crime reduction. We will build multiple ordinary least squares regression models throughout the course of our analysis and will later review the models for their compliance to the classical linear model assumptions, their resulting standard errors, and their relevance to the model(s) created by Cornwell and Trumball. For transparency, we acknowledge upfront that our model creation is largely devoid of a priori theory, is influenced by successive exploratory analysis, and our data were not gathered in within the confines of a controlled experiment. Finally, despite these restrictions, we will apply the $p < .05 $ convention without adjustment. Therefore, any appearances of causal relationships should be viewed with a healthy skepticism. 
+
+## Data Cleaning
+
+Prior to exploring our data in search of policy suggestions, we first spend some time cleaning and validating the dataset. Note that the data used in our analysis was slightly modified from the data used by Cornwell and Trumball. 
+
+```{r, message=FALSE, warning=FALSE}
+library(car)
+library(lmtest)
+library(stargazer)
+library(sandwich)
+
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits=digits)[1]
+    txt <- paste(prefix, txt, sep="")
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+
+crime = read.table("crime_v2.csv",sep = ",", header = TRUE, na.strings = c("","na")
+                   ,stringsAsFactors = FALSE, blank.lines.skip = TRUE)
+
+```
+
+After importing the dataset, we quickly check for missing values and incorrectly typed variables. We remove the last 6 (empty) rows of the data, and convert the $prbconv$ variable to a numeric.
+
+```{r}
+# Remove the last 6 blank rows
+n <- dim(crime)[1]
+crime <- crime[1:(n-6),]
+
+#Convert the prbconv field to numeric
+crime$prbconv = as.numeric(crime$prbconv)
+```
+
+We then examine the dataset for duplicate entries, removing the repeated record for County 193.
+
+```{r}
+#duplicated(crime)
+crime <- crime[-89,]
+```
+
+Next, we simplify the dataset by removing variables that will not contribute to our analysis. Namely, the year and county variables.
+
+```{r}
+# Remove the unnecessary variables
+crime <- crime[-c(1,2)]
+```
+
+We next examine the variables for any outliers that warrant additional scrutiny. By viewing $summary(crime)$ again, we see that the variables $prbarr$, $prbconv$, and $taxpc$ contain maximum values that exceed the anticipated schema range (e.g. probability does not exceed 1). After deliberation among the team, we decide to replace these errant values with the median of the variable across all counties. We chose to use these estimated values in order to keep the remaining variables from these records available for regression.
+
+```{r}
+# Replace the outlier (incorrect) values with the corresponding median
+prbarr_median = median(crime$prbarr)
+crime$prbarr[crime$prbarr > 1] = prbarr_median
+
+prbconv_median = median(crime$prbconv)
+crime$prbconv[crime$prbconv > 1] = prbconv_median
+
+taxpc_median = median(crime$taxpc)
+crime$taxpc[crime$taxpc > 100] = taxpc_median
+```
+
+Finally, we look for outliers in the variables without a schema range limit.  In viewing the histogram of each variable (not shown here for brevity), we find that the variable $wser$ has a suspiciously large outlier. Given that $wser$ consists of county aggregated data, we conclude that the extreme outlier is an error and replace the value with the median of $wser$. The remaining data is very normal, as expected from a large sample size aggregate.
+
+```{r fig.height = 3, fig.width = 5}
+hist(crime$wser)
+wser_median = median(crime$wser)
+crime$wser[crime$wser > 1000] = wser_median
+hist(crime$wser)
+```
+
+Below is the summary of the dataset after the discussed modifications.
+
+```{r}
+summary(crime)
+str(crime)
+```
+
+## Exploratory Analysis
+
+We begin our exploratory analysis by examining the univariate distributions.  Of particular interest are any variables that display a significantly non-normal distribution. We will consider these variables for transformation prior to building any OLS models. As seen below, the distributions of $density$, $taxpc$, $pctmin80$, $mix$, and $pctymle$ are far from normal. For brevity, we will comment out the other histograms. For the purposes of variable transformations we ignore the dummy variables $west$, $central$, and $urban$ as they can't be usefully transformed. We will consider possible transformations of these non-normal variables in the next section.
+
+```{r fig.height = 3, fig.width = 5}
+hist(crime$crmrte)
+hist(crime$density)
+hist(crime$taxpc)
+hist(crime$pctmin80)
+hist(crime$mix)
+hist(crime$pctymle)
+```
+
+Next, we examine the bivariate distribution of important variables with $crmrte$, which we identify to be the outcome variable for our analysis.  That is, we want to suggest policies that are likely to decrease the rate of crime. 
+
+```{r}
+pairs(~crmrte+prbarr+prbconv+prbpris+avgsen+density+pctymle, data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="Scatterplot Matrix")
+```
+
+From the above scatterplot matrix, we can see the variables that are more strongly associated with $crmrte$. These variables will be likely candidates to include in our models. 
+
+We can also see that there is indeed a relationship between $density$ and $prbarr$. As the population density, $density$, increases, the probability of arrest, $prbarr$, decreases.  We will need to carefully consider confounding effects such as these when we choose to include or omit variables in our models. 
+
+## Variable Transformations
+
+Prior to building our OLS models, we need to determine which, if any, transformations we are going to apply to our variables. We focus on the non-normally distributed variables as identified in the univariate analysis above. Our methodology will be similar for each variable: we will guess a couple appropriate transformations based on the skew of the data, plot the transformed bivariate distributions, and build a single predictor OLS regression model. From the results, we will choose the transformation (if any) that results in the most linearized relationship and the most CLM assumption consistent regression. Furthermore, we will consider the increased complexity of the transformed variable and determine if the transformation is practical. The model definitions and diagnostic plots are commented out for brevity.
+
+```{r}
+
+pairs(~crmrte+density+sqrt(density)+log(density), data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="Density Scatterplot Matrix")
+```
+
+```{r}
+pairs(~crmrte+taxpc+sqrt(taxpc)+log(taxpc), data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="taxpc Scatterplot Matrix")
+
+```
+We repeat this methodology for the remainder of the identified non-normal predictor variables.
+
+Based on our attempted transformations, we chose to transform the following variables consistently in all our models: $$density \rightarrow sqrt(density)$$ $$polpc \rightarrow nlog(polpc)$$ $$taxpc \rightarrow nlog(taxpc)$$ Additionally, for ease of understanding our regression coefficients, we will scale the following variables: $$ crmrte \rightarrow 100*crmrte$$ $$prbarr \rightarrow 100*prbarr$$ $$prbconv \rightarrow 100*prbconv$$ $$prbpris \rightarrow 100*prbpris$$ $$mix \rightarrow 100*mix$$ $$pctymle \rightarrow 100*pctymle$$ For clarity, we will transform the non-scalar transformations at the time of model creation so that the diagnostic plots are labeled more informatively.
+
+```{r}
+crime$crmrte = crime$crmrte*100
+crime$prbarr = crime$prbarr*100
+crime$prbconv = crime$prbconv*100
+crime$prbpris = crime$prbpris*100
+crime$mix = crime$mix*100
+crime$pctymle = crime$pctymle*100
+```
+
+## Model Specification
+
+In specifying models, we will initially take three broad approaches:
+
+1. Simplicity, Common Sense, and A Priori Theory (Limited to Lab 3 Prompt)
+2. Maximum Number of Predictor Variables
+3. Parsimony (Based on adjusted R2 values and multiple variable selection algorithms)
+
+### Model 1 - Simplicity
+
+For this approach, we chose to include the variables probability of arrest, $prbarr$, probability of conviction, $prbconv$, probability of a prison sentence, $prbpris$, average sentence, $avgsen$, our transformed density variable, $sqrt(density)$, and percent young male, $pctymle$. The first four variables were chosen based on the theory indirectly introduced in the lab prompt, i.e. criminals act rationally when weighing the potential consequences of their actions. We included $sqrt(density)$ due to its high correlation with $crmrte$ in our EDA, as well as the accepted notion that crime is more prevalent in urban populations where human interaction is more frequent. Finally, $pctymle$ was included based on the notion that young males are generally associated with more wreckless behavior.
+
+```{r}
+(model1 = lm(log(crmrte) ~ prbarr + prbconv + prbpris + avgsen + sqrt(density) + pctymle, 
+             data = crime))
+summary(model1)$adj.r.squared
+AIC(model1)
+
+coeftest(model1, vcov=vcovHC)
+(se.model1 = sqrt(diag(vcovHC(model1))))
+```
+
+The model has an adjusted R squared value of 0.488. We will leave further diagnostic assessments and significance testing for later analysis. In practicality, we can really only suggest policy changes that affect the first four variables, for which the coefficients can be interpretated along the lines of "an increase of 1% probability of arrest is associated with a decrease in .02 crimes committed per 100 people, all other included factors remaining the same." Taken at face value, increasing the average prison sentence should have the largest affect on crime rates. However, the ability for specific policy to affect any of these predictor variables, let alone at a reasonable cost, is not a part of our analysis.
+
+We omitted certain variables for this model for various reasons. When we performed a scatterplot matrix we are able to identify variables that are positively correlated with each other leading to multicollinearity. We chose to omit variables such as polpc and taxpc because of the upward bias of density on police per capita and tax revenue per capita. We also chose to omit all wage variables for this model. The wage variables (wcon, wtuc, wtrd, wfir, wser, wmfg, wfed, wsta, wloc) are positively correlated with one another providing minimal impact to crime rate. Based on our EDA, we excluded the geographic variables (west, central, urban) because we did not identify a distinct relationship between geography and crime rate. Even though the bias would be near zero, we chose to leave these variables out of this particular model.
+
+
+### Model 2 - Maximum Predictors
+
+In this approach we include nearly all the variables, again, to predict the variable $crmrte$. We omit only one variable, $mix$, due to its nature as a measure of the crime being committed, instead of a potential determinant of that crime.
+
+```{r}
+(model2 = lm(log(crmrte) ~ prbarr + prbconv + prbpris + avgsen +log(polpc) + sqrt(density) 
+             + log(taxpc) + west + central + urban + pctmin80 + wcon 
+             + wtuc + wtrd + wfir + wser + wmfg + wfed + wsta + wloc 
+             + pctymle, data = crime))
+summary(model2)$adj.r.squared
+AIC(model2)
+
+coeftest(model2, vcov=vcovHC)
+(se.model2 = sqrt(diag(vcovHC(model2))))
+```
+
+In this model we see a greatly improved adjusted R squared value of 0.672. We also allow the multicollinearities to account for their interdependencies. 
+
+### Model 3 - Parsimony
+
+In this approach, we want to balance the model's description of the data against the danger of overfitting to irrelevant variables. There are some  automatic methods available like forward selection, backward elimination and stepwise regression to identify the variables that improve the model in this respect. Further, there are functions available as part of olsrr package available to carry out these automatic methods. It appears the forward selection based on p-value provides the highest adjusted R square value, which is presented below:
+
+```{r}
+hist(crime$crmrte)
+hist(log(crime$crmrte))
+```
+
+```{r}
+#library(olsrr)
+
+#model3 = lm(log(crmrte) ~ prbarr + prbconv + prbpris + avgsen + log(polpc) 
+#    + sqrt(density) + log(taxpc) +  west + central + urban 
+#    + pctmin80 +wcon + wtuc + wtrd + wfir + wser + wmfg 
+#    + wfed + wsta + wloc + mix + pctymle , data = crime)
+
+#model3_base <- summary(model3)$adj.r.squared
+#model3_base
+
+#ols_step_forward_p(model3)
+```
+
+```{r}
+(model3_new = lm(log(crmrte) ~ sqrt(density) + pctmin80 + pctymle + west +  central +     log(polpc) + avgsen + wfed + wfir + prbarr + wcon + wser + prbconv + wloc +  log(taxpc) , 
+             data = crime))
+summary(model3_new)$adj.r.squared
+AIC(model3_new)
+```
+Let us verify whether the model3 satisfies the CLM assumptions. We will use the diagnostic plots in this regard.
+
+## CLM 1 -  Linear Model
+
+The model(model 3) is specified such that the dependent variable is a linear function of the explanatory variables.
+
+Is the assumption valid? **Yes**
+
+## CLM 2 - Zero-Conditional Mean
+
+```{r}
+plot(model3_new, which = 1)
+```
+From the Residuals vs Fitted plot, we can see the residual line to be a straight line with some minor deviations to the right due to outliers. Zero-conditional mean assumption is satisfied by the model 3.
+
+Is the assumption valid? **Yes**
+
+## CLM 3 -  Homoskedasticity
+
+```{r}
+plot(model3_new, which = 3)
+```
+There is a slight curve observed in the Scale-location plot. Further, let us execute the Breusch-Pagan test on model 3. The null hypothesis in this case is that model has homoskedasticity.
+
+```{r}
+bptest(model3_new)
+```
+It can be seen that p-value < 0.05. So, we reject the null hypothesis (i.e) the model has heteroskedasticity. To address heteroskedasticity, we use robust standard errors.
+
+```{r}
+coeftest(model3_new, vcov=vcovHC)
+(se.model3_new = sqrt(diag(vcovHC(model3_new))))
+```
+
+Is the assumption valid? **Yes**
+
+
+## CLM 4 - Normality of Residuals
+
+Let us plot the histogram of residuals and Q-Q plot. We will consider the formal Shapiro-Wilk test of normality as well, where the null hypothesis is the errors are normally distributed.
+```{r}
+hist(model3_new$residuals, breaks = 50)
+plot(model3_new, which = 2)
+shapiro.test(model3_new$residuals)
+```
+
+The histogram of residuals and the Q-Q plot show that there are outliers at the edges. The histogram appears to be fairly normally distributed, while the Q-Q plot does not deviate significantly from normality as well. Overall, based on the two plots, the residuals appear to be fairly normal.
+
+Furthermore, the p-value from Shapiro-Wilk normality test is 0.02158 which is less than the significance value of 0.05. So, we reject the null hypothesis (i.e) residuals are not normally distributed.
+ 
+However, since there are 90 observations, we can rely on OLS asymptotics. Because of the large sample size, we will also get normality of our sampling distributions.
+
+Is the assumption valid? **Yes**
+
+ 
+## CLM 5 - Multi-Collinearity
+ 
+ Let us calculate the VIF values to determine the multi-collinearity.
+ 
+```{r}
+vif(model3_new)
+sqrt(vif(model3_new)) > 2
+```
+
+After we take the square root of the variance inflation factor, there is no multicollinear relationship that exists between the independent variables.
+
+Exogeneity:
+
+```{r}
+new_data_frame <- data.frame(sqrt(crime$density),crime$pctmin80, crime$pctymle, crime$west,crime$central, log(crime$polpc), crime$avgsen, crime$wfed, crime$wfir, crime$prbarr, crime$wcon, crime$wser, crime$prbconv, crime$wloc,  log(crime$taxpc), model3_new$residuals)
+result_cov <- cov(new_data_frame)[,"model3_new.residuals"]
+result_cov
+```
+It could be seen that the covariance between the explanatory variables and residuals is almost zero, thereby satisfying the exogenity assumption.
+
+Is the assumption valid? **Yes**
+
+
+## CLM 6 - Random Sampling
+
+The shape of the log distrubtion for crime rate is more normal indicating that there might be some missing observations due to constraints in the other variables. These constraints likely causes crime rate to not meet the random sampling condition.
+
+(other variables do not appear to be random - need more research - HW12Key will be useful)
+
+Is the assumption valid? **No**
+
+
+```{r}
+#(model3 = lm(crmrte ~ sqrt(density) + pctmin80 + log(polpc) + prbarr + prbconv 
+#             + wser + wcon + central + avgsen + west + pctymle, 
+#             data = crime))
+#summary(model3)$adj.r.squared
+#AIC(model3)
+```
+
+The model derived by the forward selection method has an adjusted R squared value of 0.757.  A scatterplot matrix of the chosen variables can help to identify variables that are correlated with each other leading to multicollinearity. 
+
+```{r}
+pairs(~sqrt(density) + pctmin80 + log(polpc) + 
+    prbarr + prbconv + wser + wcon + central + avgsen + west + 
+    pctymle, data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="Covariate Scatterplot Matrix")
+
+```
+It can be seen that density and wser/wcon are higly correlated. Similar is the case between wser and wcon, west and pctrmin80. Density acts as a proxy for wser and wcon variables.
+
+
+As part of model3, we have omitted couple of variables like prbpris, taxpc, urban, wtuc, wtrd, wfir, wmfg, wfed, wsta, wloc, mix. There will be an omitted variable bias, if the omitted variables are correlated with the dependent variable and with that of the predictor variables as well. A scatterplot matrix will help us to identify the correlations in this case.
+
+```{r}
+pairs(~log(crmrte) +prbpris + log(taxpc) + urban + wtuc + wtrd + wfir + wmfg + 
+      wfed + wsta + wloc + mix, data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="Omitted variable dependent variable correlation Scatterplot Matrix")
+
+pairs(~urban + wtrd + wfed +sqrt(density) + pctmin80 + log(polpc) + 
+    prbarr + prbconv + wser + wcon + central + avgsen + west + 
+    pctymle, data=crime,
+      lower.panel=panel.smooth, upper.panel=panel.cor, 
+      pch=20, main="Omitted variable predictor variable correlation Scatterplot Matrix")
+
+```
+
+
+It can be seen that urban, wtrd and wfed are correlated with that of crmrte. Also, urban and wfed are correlated with that of density as well. So, the omitted variables urban, wtrd and wfed induce an upward bias.
+
+## Model Discussion
+
+Our model parameters are presented below in table format. The coefficients are surprisingly robust between these three models, consistently maintaining the same sign and approximate magnitude. Without examining the applicability to underlying model assumptions, or statistical significance of the coefficients, we can identify the general factors that that are associated with crime rates.
+
+```{r, results='asis'}
+stargazer(model1, model2, model3, type = "latex",
+          report = "vc",
+          title="Model Comparison",
+          keep.stat = c("rsq", "adj.rsq", "aic", "n"),
+          omit.table.layout = "n",
+          float=FALSE)
+```
+
+## Conclusion
+
+Based on our assumptions and methodology, we were able to apply three different regression models to provide insights on the dataset. Before applying our models, we had to groom our dataset and learn more about it.  We cleaned our dataset by removing empty rows of data, extraneous variables, and normalized outliers. We also performed exploratory analysis to examine the underlying univariate distributions. Our focus was on the non-normally distributed variables for transformation. After applying the designated transformations, we were able use our models on the updated dataset. We used three different approaches which consisted of simple, maximum number of predictor variables, and parsimony. Each model provided different insights which allowed us to identify key factors associated to crime rates. Overall, our methodology is based on assumptions we made after testing different variable relationships, transformations, and data integrity. We were able to generate key statistics to identify associated variables to crime rate.
